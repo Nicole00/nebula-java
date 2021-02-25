@@ -85,8 +85,7 @@ public class MetaClientImpl extends AbstractClient implements MetaClient {
         Random random = new Random(System.currentTimeMillis());
         int position = random.nextInt(addresses.size());
         HostAndPort address = addresses.get(position);
-        transport = new TSocket(address.getHost(), address.getPort(), timeout,
-                connectionTimeout);
+        transport = new TSocket(address.getHost(), address.getPort(), timeout, connectionTimeout);
         transport.open();
         protocol = new TCompactProtocol(transport);
         client = new MetaService.Client(protocol);
@@ -137,10 +136,22 @@ public class MetaClientImpl extends AbstractClient implements MetaClient {
      * @return
      */
     public List<SpaceNameID> listSpaces() {
+        int retry = 1;
         ListSpacesReq request = new ListSpacesReq();
-        ListSpacesResp response;
+        ListSpacesResp response = null;
         try {
-            response = client.listSpaces(request);
+            while (retry-- >= 0) {
+                response = client.listSpaces(request);
+                if (response.code == ErrorCode.E_LEADER_CHANGED) {
+                    close();
+                    HostAddr newLeader = response.getLeader();
+                    transport = new TSocket(AddressUtil.intToIPv4(newLeader.getIp()),
+                            newLeader.getPort(), timeout, connectionTimeout);
+                    transport.open();
+                    protocol = new TCompactProtocol(transport);
+                    client = new MetaService.Client(protocol);
+                }
+            }
         } catch (TException e) {
             LOGGER.error(String.format("List Spaces Error: %s", e.getMessage()));
             return Lists.newLinkedList();
