@@ -9,6 +9,7 @@ package com.vesoft.nebula.client.meta;
 import com.facebook.thrift.TException;
 import com.facebook.thrift.protocol.TCompactProtocol;
 import com.facebook.thrift.transport.TSocket;
+import com.facebook.thrift.transport.TTransportException;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.net.HostAndPort;
@@ -50,6 +51,7 @@ import org.slf4j.LoggerFactory;
 public class MetaClientImpl extends AbstractClient implements MetaClient {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(MetaClientImpl.class);
+    private int retry = 1;
 
     // Use a lock to protect the cache
     private ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
@@ -85,10 +87,7 @@ public class MetaClientImpl extends AbstractClient implements MetaClient {
         Random random = new Random(System.currentTimeMillis());
         int position = random.nextInt(addresses.size());
         HostAndPort address = addresses.get(position);
-        transport = new TSocket(address.getHost(), address.getPort(), timeout, connectionTimeout);
-        transport.open();
-        protocol = new TCompactProtocol(transport);
-        client = new MetaService.Client(protocol);
+        getClient(address.getHost(), address.getPort());
 
         for (SpaceNameID space : listSpaces()) {
             String spaceName = space.getName();
@@ -118,6 +117,20 @@ public class MetaClientImpl extends AbstractClient implements MetaClient {
         return 0;
     }
 
+    private void getClient(String host, int port) throws TException {
+        transport = new TSocket(host, port, timeout, connectionTimeout);
+        transport.open();
+        protocol = new TCompactProtocol(transport);
+        client = new MetaService.Client(protocol);
+    }
+
+    private void freshClient(int responseCode, HostAddr leader) throws TException {
+        if (responseCode == ErrorCode.E_LEADER_CHANGED) {
+            close();
+            getClient(AddressUtil.intToIPv4(leader.getIp()), leader.getPort());
+        }
+    }
+
     public Map<String, Integer> getSpaces() {
         return spaceNameMap;
     }
@@ -136,25 +149,21 @@ public class MetaClientImpl extends AbstractClient implements MetaClient {
      * @return
      */
     public List<SpaceNameID> listSpaces() {
-        int retry = 1;
+
         ListSpacesReq request = new ListSpacesReq();
         ListSpacesResp response = null;
         try {
             while (retry-- >= 0) {
                 response = client.listSpaces(request);
-                if (response.code == ErrorCode.E_LEADER_CHANGED) {
-                    close();
-                    HostAddr newLeader = response.getLeader();
-                    transport = new TSocket(AddressUtil.intToIPv4(newLeader.getIp()),
-                            newLeader.getPort(), timeout, connectionTimeout);
-                    transport.open();
-                    protocol = new TCompactProtocol(transport);
-                    client = new MetaService.Client(protocol);
-                }
+                freshClient(response.getCode(), response.getLeader());
             }
         } catch (TException e) {
             LOGGER.error(String.format("List Spaces Error: %s", e.getMessage()));
             return Lists.newLinkedList();
+        }
+        if (response == null) {
+            LOGGER.error("response of listSpaces is null");
+            return Lists.newArrayList();
         }
         if (response.getCode() == ErrorCode.SUCCEEDED) {
             return response.getSpaces().stream().map(SpaceNameID::new).collect(Collectors.toList());
@@ -199,14 +208,21 @@ public class MetaClientImpl extends AbstractClient implements MetaClient {
         int spaceID = getSpaceIdFromCache(spaceName);
         request.setSpace_id(spaceID);
 
-        GetPartsAllocResp response;
+        GetPartsAllocResp response = null;
         try {
-            response = client.getPartsAlloc(request);
+            while (retry-- >= 0) {
+                response = client.getPartsAlloc(request);
+                freshClient(response.getCode(), response.getLeader());
+            }
         } catch (TException e) {
             LOGGER.error(String.format("Get Parts failed: %s", e.getMessage()));
             return Maps.newHashMap();
         }
 
+        if (response == null) {
+            LOGGER.error("response of getPartsAlloc is null.");
+            return Maps.newHashMap();
+        }
         if (response.getCode() == ErrorCode.SUCCEEDED) {
             Map<Integer, List<HostAndPort>> addressMap = Maps.newHashMap();
             for (Map.Entry<Integer, List<HostAddr>> entry : response.getParts().entrySet()) {
@@ -288,14 +304,21 @@ public class MetaClientImpl extends AbstractClient implements MetaClient {
         ListTagsReq request = new ListTagsReq();
         int spaceID = getSpaceIdFromCache(spaceName);
         request.setSpace_id(spaceID);
-        ListTagsResp response;
+        ListTagsResp response = null;
         try {
-            response = client.listTags(request);
+            while (retry-- >= 0) {
+                response = client.listTags(request);
+                freshClient(response.getCode(), response.getLeader());
+            }
         } catch (TException e) {
             LOGGER.error(String.format("Get Tag Error: %s", e.getMessage()));
             return Lists.newLinkedList();
         }
 
+        if (response == null) {
+            LOGGER.error("response of listTags is null.");
+            return Lists.newLinkedList();
+        }
         if (response.getCode() == ErrorCode.SUCCEEDED) {
             return response.getTags();
         } else {
@@ -311,18 +334,25 @@ public class MetaClientImpl extends AbstractClient implements MetaClient {
         request.setSpace_id(spaceID);
         request.setTag_name(tagName);
         request.setVersion(LATEST_SCHEMA_VERSION);
-        GetTagResp response;
-
+        GetTagResp response = null;
         try {
-            response = client.getTag(request);
+            while (retry-- >= 0) {
+                response = client.getTag(request);
+                freshClient(response.getCode(), response.getLeader());
+            }
         } catch (TException e) {
             LOGGER.error(String.format("Get Tag Error: %s", e.getMessage()));
             return null;
         }
 
+        if (response == null) {
+            LOGGER.error("response of getTag is null.");
+            return null;
+        }
         if (response.getCode() == ErrorCode.SUCCEEDED) {
             return response.getSchema();
         } else {
+            LOGGER.error(String.format("Get Tag Error: %s", response.getCode()));
             return null;
         }
     }
@@ -338,11 +368,18 @@ public class MetaClientImpl extends AbstractClient implements MetaClient {
         request.setSpace_id(spaceNameMap.get(spaceName));
         request.setTag_name(tagName);
         request.setVersion(version);
-        GetTagResp response;
+        GetTagResp response = null;
         try {
-            response = client.getTag(request);
+            while (retry-- >= 0) {
+                response = client.getTag(request);
+                freshClient(response.getCode(), response.getLeader());
+            }
         } catch (TException e) {
             e.printStackTrace();
+            return result;
+        }
+        if (response == null) {
+            LOGGER.error("response of getTag is null.");
             return result;
         }
 
@@ -405,14 +442,21 @@ public class MetaClientImpl extends AbstractClient implements MetaClient {
         int spaceID = getSpaceIdFromCache(spaceName);
         request.setSpace_id(spaceID);
 
-        ListEdgesResp response;
+        ListEdgesResp response = null;
         try {
-            response = client.listEdges(request);
+            while (retry-- >= 0) {
+                response = client.listEdges(request);
+                freshClient(response.getCode(), response.getLeader());
+            }
         } catch (TException e) {
             LOGGER.error(String.format("Get Edge Error: %s", e.getMessage()));
             return Lists.newLinkedList();
         }
 
+        if (response == null) {
+            LOGGER.error("response of getEdges is null.");
+            return Lists.newLinkedList();
+        }
         if (response.getCode() == ErrorCode.SUCCEEDED) {
             return response.getEdges();
         } else {
@@ -428,15 +472,21 @@ public class MetaClientImpl extends AbstractClient implements MetaClient {
         request.setSpace_id(spaceID);
         request.setEdge_name(edgeName);
         request.setVersion(LATEST_SCHEMA_VERSION);
-        GetEdgeResp response;
-
+        GetEdgeResp response = null;
         try {
-            response = client.getEdge(request);
+            while (retry-- >= 0) {
+                response = client.getEdge(request);
+                freshClient(response.getCode(), response.getLeader());
+            }
         } catch (TException e) {
-            LOGGER.error(String.format("Get Tag Error: %s", e.getMessage()));
+            LOGGER.error(String.format("Get Edge Error: %s", e.getMessage()));
             return null;
         }
 
+        if (response == null) {
+            LOGGER.error("response of getEdge is null");
+            return null;
+        }
         if (response.getCode() == ErrorCode.SUCCEEDED) {
             return response.getSchema();
         } else {
@@ -456,14 +506,21 @@ public class MetaClientImpl extends AbstractClient implements MetaClient {
         request.setEdge_name(edgeName);
         request.setVersion(version);
 
-        GetEdgeResp response;
+        GetEdgeResp response = null;
         try {
-            response = client.getEdge(request);
+            while (retry-- >= 0) {
+                response = client.getEdge(request);
+                freshClient(response.getCode(), response.getLeader());
+            }
         } catch (TException e) {
             e.printStackTrace();
             return result;
         }
 
+        if (response == null) {
+            LOGGER.error("response of getEdge is null.");
+            return result;
+        }
         for (ColumnDef column : response.getSchema().columns) {
             result.put(column.name, NebulaTypeUtil.supportedTypeToClass(column.type.type));
         }
