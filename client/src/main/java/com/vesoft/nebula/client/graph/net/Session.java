@@ -10,6 +10,7 @@ import com.vesoft.nebula.client.graph.data.HostAddress;
 import com.vesoft.nebula.client.graph.data.ResultSet;
 import com.vesoft.nebula.client.graph.exception.IOErrorException;
 import com.vesoft.nebula.graph.ExecutionResponse;
+import java.io.IOException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,7 +24,6 @@ import org.slf4j.LoggerFactory;
  * The data type obtained by the user is `ValueWrapper`,
  * which is the wrapper of the original data structure Value returned by the server.
  * The user can directly read the data using the interface of ValueWrapper.
- *
  */
 public class Session {
     private final long sessionID;
@@ -37,9 +37,9 @@ public class Session {
     /**
      * Constructor
      *
-     * @param connection the connection from the pool
-     * @param authResult the auth result from graph service
-     * @param connPool the connection pool
+     * @param connection   the connection from the pool
+     * @param authResult   the auth result from graph service
+     * @param connPool     the connection pool
      * @param retryConnect whether to retry after the connection is disconnected
      */
     public Session(SyncConnection connection,
@@ -63,7 +63,7 @@ public class Session {
     public synchronized ResultSet execute(String stmt) throws IOErrorException {
         if (connection == null) {
             throw new IOErrorException(IOErrorException.E_CONNECT_BROKEN,
-                "The session was released, couldn't use again.");
+                    "The session was released, couldn't use again.");
         }
 
         if (connectionIsBroken.get() && retryConnect) {
@@ -72,7 +72,7 @@ public class Session {
                 return new ResultSet(resp, timezoneOffset);
             } else {
                 throw new IOErrorException(IOErrorException.E_ALL_BROKEN,
-                    "All servers are broken.");
+                        "All servers are broken.");
             }
         }
 
@@ -98,6 +98,27 @@ public class Session {
             }
             throw ie;
         }
+    }
+
+    /**
+     * execute ngql with transaction
+     */
+    public synchronized ResultSet execute(String stmt, boolean enableTransaction)
+            throws IOErrorException {
+        if (!enableTransaction) {
+            return execute(stmt);
+        }
+        if (stmt.startsWith("begin;") || stmt.startsWith("BEGIN;")) {
+            if (stmt.trim().endsWith("rollback;") || stmt.endsWith("ROLLBACK;")) {
+                return null;
+            } else if (stmt.endsWith("commit;") || stmt.endsWith("COMMIT;")) {
+                String ngql = stmt.replace("begin;", "").replace("commit;", "");
+                return execute(ngql);
+            } else {
+                return null;
+            }
+        }
+        throw new IllegalArgumentException("ngql has wrong transaction format.");
     }
 
     /**

@@ -79,9 +79,36 @@
                 <configuration>
                     <source>1.8</source>
                     <target>1.8</target>
+                    <compilerArguments>
+                        <extdirs>${project.build.directory}/lib</extdirs>
+                    </compilerArguments>
                     <generatedSourcesDirectory>src/main/generated</generatedSourcesDirectory>
                 </configuration>
             </plugin>
+
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <version>2.1</version>
+                <executions>
+                    <execution>
+                        <id>copy-dependencies</id>
+                        <phase>prepare-package</phase>
+                        <goals>
+                            <goal>copy-dependencies</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <includeTypes>jar</includeTypes>
+                    <includeScope>compile</includeScope>
+                    <overWriteSnapshots>true</overWriteSnapshots>
+                    <type>jar</type>
+                    <outputDirectory>${project.build.directory}/lib</outputDirectory>
+                </configuration>
+            </plugin>
+
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-checkstyle-plugin</artifactId>
@@ -144,6 +171,16 @@
                         </goals>
                     </execution>
                 </executions>
+                <configuration>
+                <archive>
+                    <manifest>
+                        <addClasspath>true</addClasspath>
+                        <classpathPrefix>lib/</classpathPrefix>
+                        <mainClass>com.vesoft.nebula.NebulaClientTest</mainClass>
+                        <useUniqueVersions>false</useUniqueVersions>
+                    </manifest>
+                </archive>
+            </configuration>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -200,7 +237,7 @@
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-log4j12</artifactId>
             <version>${slf4j-log4j12.version}</version>
-            <optional>true</optional>
+<!--            <optional>true</optional>-->
         </dependency>
         <dependency>
             <groupId>org.slf4j</groupId>
