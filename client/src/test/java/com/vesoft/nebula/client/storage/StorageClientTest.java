@@ -434,6 +434,7 @@ public class StorageClientTest {
                     "person");
             assertIterator(resultIterator);
         } catch (Exception e) {
+            System.out.println("scan failed for cs ssl." + e.getMessage());
             e.printStackTrace();
             assert (false);
         } finally {
